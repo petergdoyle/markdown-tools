@@ -12,6 +12,10 @@ A collection of Python CLI utilities for working with markdown files.
 
 Converts one or more markdown files to PDF using a markdown → HTML → PDF rendering pipeline. Supports single files, directories, and recursive directory traversal with depth control.
 
+**Images & diagrams:**
+- **Relative images** (`![](pic.png)`, `![](images/x.png)`) render — paths resolve against the source file's directory.
+- **Mermaid diagrams** (` ```mermaid ` fenced blocks) render to embedded PNG images when the [mermaid CLI](https://github.com/mermaid-js/mermaid-cli) (`mmdc`) is installed (`npm install -g @mermaid-js/mermaid-cli`). Large diagrams are scaled to fit the page (never overflow or clip). Without `mmdc`, the block is left as a code block — nothing breaks.
+
 ### CLI Usage
 
 ```bash
@@ -54,9 +58,23 @@ make md2pdf SOURCE=./docs OUTPUT=./pdfs DEPTH=3
 
 ### Installation
 
-#### Current user only
+#### Install straight from the repo (like the other markdown-* tools)
 
-Installs `md2pdf` to `~/.local/bin` using `uv tool install`. No sudo required.
+Consistent with `markdown-to-jira` / `markdown-to-confluence` — one command, no clone:
+
+```bash
+uv tool install "git+ssh://git@github.com/petergdoyle/markdown-tools.git"
+```
+
+Installs the `md2pdf` command. Requires the WeasyPrint native deps (pango et al.);
+on macOS: `brew install pango`. If `md2pdf` can't find `libpango` at runtime, run
+it via a wrapper that sets `DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix)/lib"` (the
+`make install` target below writes this wrapper for you).
+
+#### Current user only (from a clone)
+
+Installs `md2pdf` to `~/.local/bin` using `uv tool install`, plus a wrapper that
+wires the WeasyPrint native libs. No sudo required.
 
 ```bash
 make install

@@ -60,5 +60,17 @@ th {
 
 img {
     max-width: 100%;
+    height: auto;
+}
+
+/* Rendered mermaid diagrams: scale to fit the page in BOTH dimensions so a
+   large diagram shrinks to fit rather than overflowing the width or being
+   clipped across a page break. 22cm ~= A4 printable height after margins. */
+img.mermaid-diagram {
+    display: block;
+    margin: 1em auto;
+    max-width: 100%;
+    max-height: 22cm;
+    object-fit: contain;
 }
 """

@@ -183,7 +183,7 @@ class TestConvertMarkdownToPdfSuccess:
         """Tests the conversion pipeline with html_to_pdf mocked out."""
         output_path = output_dir / "sample.pdf"
 
-        def fake_html_to_pdf(html, out_path, css):
+        def fake_html_to_pdf(html, out_path, css, base_url=None):
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_bytes(b"%PDF-1.4 fake content")
 
@@ -236,7 +236,7 @@ class TestConvertMarkdownToPdfCreatesParentDirs:
         output_path = tmp_path / "a" / "b" / "c" / "sample.pdf"
         assert not output_path.parent.exists()
 
-        def fake_html_to_pdf(html, out_path, css):
+        def fake_html_to_pdf(html, out_path, css, base_url=None):
             # html_to_pdf is responsible for creating parent dirs
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_bytes(b"%PDF-1.4 fake content")
@@ -259,3 +259,140 @@ class TestConvertMarkdownToPdfCreatesParentDirs:
         assert result.success is True
         assert output_path.exists()
         assert output_path.parent.exists()
+
+
+# --- Tests for relative-image rendering (base_url wiring) ---
+def _make_png(path):
+    """Write a minimal valid 8x8 red PNG."""
+    import struct
+    import zlib
+
+    def chunk(typ, data):
+        c = typ + data
+        return struct.pack(">I", len(data)) + c + struct.pack(">I", zlib.crc32(c) & 0xFFFFFFFF)
+
+    w = h = 8
+    raw = b"".join(b"\x00" + b"\xff\x00\x00" * w for _ in range(h))
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(raw))
+        + chunk(b"IEND", b"")
+    )
+    path.write_bytes(png)
+
+
+class TestRelativeImageRendering:
+    """convert_markdown_to_pdf resolves relative image paths via base_url."""
+
+    def test_base_url_is_passed_to_html_to_pdf(self, tmp_path):
+        """The source file's directory is threaded as the base_url so relative
+        images resolve (regression guard for the missing-base_url image bug)."""
+        src = tmp_path / "doc.md"
+        src.write_text("# T\n\n![a](pic.png)\n", encoding="utf-8")
+        captured = {}
+
+        def fake_html_to_pdf(html, out_path, css, base_url=None):
+            captured["base_url"] = base_url
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_bytes(b"%PDF-1.4")
+
+        with patch("md2pdf.converter.html_to_pdf", side_effect=fake_html_to_pdf):
+            result = convert_markdown_to_pdf(src, tmp_path / "out.pdf")
+
+        assert result.success is True
+        assert captured["base_url"], "base_url must be set"
+        # Points at the source file's directory as a file:// URL.
+        assert captured["base_url"].startswith("file://")
+        assert captured["base_url"].rstrip("/").endswith(str(tmp_path.resolve()).replace("\\", "/"))
+
+    @requires_weasyprint
+    def test_relative_image_renders_without_base_uri_warning(self, tmp_path):
+        import logging
+
+        _make_png(tmp_path / "pic.png")
+        (tmp_path / "doc.md").write_text("# T\n\n![a](pic.png)\n", encoding="utf-8")
+
+        msgs: list[str] = []
+        handler = logging.Handler()
+        handler.emit = lambda r: msgs.append(r.getMessage())
+        logger = logging.getLogger("weasyprint")
+        logger.addHandler(handler)
+        logger.setLevel(logging.WARNING)
+        try:
+            result = convert_markdown_to_pdf(tmp_path / "doc.md", tmp_path / "out.pdf")
+        finally:
+            logger.removeHandler(handler)
+
+        assert result.success is True, result.error
+        assert not any("base URI" in m for m in msgs), f"image did not resolve: {msgs}"
+
+
+# --- Tests for mermaid → embedded image rendering ---
+def _mmdc_available():
+    from md2pdf import mermaid
+
+    return mermaid.available()
+
+
+requires_mmdc = pytest.mark.skipif(not _mmdc_available(), reason="mermaid CLI (mmdc) not installed")
+
+
+class TestMermaidRendering:
+    """```mermaid``` fences become embedded <img> diagrams in the PDF."""
+
+    def test_no_mermaid_is_noop(self, tmp_path):
+        from md2pdf.converter import render_mermaid_blocks
+
+        html = "<p>no diagrams here</p>"
+        out, rendered, failed = render_mermaid_blocks(html, tmp_path / "unused")
+        assert out == html and rendered == 0 and failed == 0
+
+    def test_missing_mmdc_leaves_code_block(self, tmp_path, monkeypatch):
+        """Without mmdc, the mermaid code block is left untouched (graceful)."""
+        from md2pdf import converter
+
+        monkeypatch.setattr(converter.mermaid, "available", lambda *a, **k: False)
+        html = '<pre><code class="language-mermaid">flowchart LR\n A--&gt;B</code></pre>'
+        out, rendered, failed = converter.render_mermaid_blocks(html, tmp_path / "imgs")
+        assert out == html and rendered == 0 and failed == 0
+
+    def test_render_failure_keeps_code_block(self, tmp_path, monkeypatch):
+        """A diagram that fails to render is counted failed and left as code."""
+        from md2pdf import converter
+
+        monkeypatch.setattr(converter.mermaid, "available", lambda *a, **k: True)
+
+        def _boom(*a, **k):
+            raise converter.mermaid.MermaidError("bad diagram")
+
+        monkeypatch.setattr(converter.mermaid, "render_png", _boom)
+        html = '<pre><code class="language-mermaid">nonsense</code></pre>'
+        out, rendered, failed = converter.render_mermaid_blocks(html, tmp_path / "imgs")
+        assert rendered == 0 and failed == 1
+        assert "language-mermaid" in out  # original code block preserved
+
+    @requires_mmdc
+    def test_mermaid_block_becomes_image(self, tmp_path):
+        from md2pdf.converter import markdown_to_html, render_mermaid_blocks
+
+        html = markdown_to_html("```mermaid\nflowchart LR\n A-->B\n```\n")
+        out, rendered, failed = render_mermaid_blocks(html, tmp_path / "imgs")
+        assert rendered == 1 and failed == 0
+        assert 'class="mermaid-diagram"' in out
+        assert "language-mermaid" not in out
+        # A PNG was written and referenced by absolute file URL.
+        pngs = list((tmp_path / "imgs").glob("mermaid-*.png"))
+        assert len(pngs) == 1
+
+    @requires_mmdc
+    @requires_weasyprint
+    def test_full_pipeline_embeds_mermaid(self, tmp_path):
+        from md2pdf.converter import convert_markdown_to_pdf
+
+        (tmp_path / "d.md").write_text(
+            "# T\n\n```mermaid\nflowchart LR\n A-->B-->C\n```\n", encoding="utf-8"
+        )
+        r = convert_markdown_to_pdf(tmp_path / "d.md", tmp_path / "out.pdf")
+        assert r.success is True, r.error
+        assert (tmp_path / "out.pdf").stat().st_size > 0
