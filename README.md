@@ -58,27 +58,36 @@ make md2pdf SOURCE=./docs OUTPUT=./pdfs DEPTH=3
 
 ### Installation
 
-#### Install straight from the repo (like the other markdown-* tools)
-
-Consistent with `markdown-to-jira` / `markdown-to-confluence` — one command, no clone:
-
-```bash
-uv tool install "git+ssh://git@github.com/petergdoyle/markdown-tools.git"
-```
-
-Installs the `md2pdf` command. Requires the WeasyPrint native deps (pango et al.);
-on macOS: `brew install pango`. If `md2pdf` can't find `libpango` at runtime, run
-it via a wrapper that sets `DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix)/lib"` (the
-`make install` target below writes this wrapper for you).
-
-#### Current user only (from a clone)
-
-Installs `md2pdf` to `~/.local/bin` using `uv tool install`, plus a wrapper that
-wires the WeasyPrint native libs. No sudo required.
+**Use `make install`.** From a clone of this repo:
 
 ```bash
 make install
 ```
+
+That single command does everything md2pdf needs — and unlike `markdown-to-jira`
+/ `markdown-to-confluence`, md2pdf has a **native C dependency** (WeasyPrint →
+pango), which a bare `uv tool install` does *not* set up. `make install`:
+
+1. installs pango via Homebrew if it's missing;
+2. installs the tool from **current source** (`uv tool install --force --reinstall
+   --no-cache` — the `--no-cache` matters: the version stays `0.1.0` between edits,
+   so a plain install would silently reuse a stale cached build and ship old code);
+3. writes a launcher at `~/.local/bin/md2pdf` that puts pango on the dynamic-load
+   path (`DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix)/lib"`) so WeasyPrint loads.
+
+Run it again any time you pull new code — it's idempotent and always installs the
+latest.
+
+> **Why not `uv tool install git+ssh://…`?** It works for the other two tools, but
+> for md2pdf it installs the Python code **without** the pango launcher, so you'll
+> hit `cannot load library 'libpango-1.0-0'` at runtime. If you must install that
+> way, also `brew install pango` and wrap the binary so
+> `DYLD_FALLBACK_LIBRARY_PATH` includes `$(brew --prefix)/lib`. `make install` is
+> the supported path.
+
+After install, `md2pdf` is available from any terminal session. If your shell can't find it, add `~/.local/bin` to your PATH:
+
+```bash
 
 After install, `md2pdf` is available from any terminal session. If your shell can't find it, add `~/.local/bin` to your PATH:
 

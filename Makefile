@@ -45,7 +45,10 @@ install: ## Install md2pdf for current user (~/.local/bin)
 		echo "📎 Installing pango (required by WeasyPrint)..."; \
 		/opt/homebrew/bin/brew install pango; \
 	fi
-	@uv tool install --force .
+	@# --reinstall --no-cache: the version stays 0.1.0 between edits, so a plain
+	@# `uv tool install` would reuse a stale cached wheel and install OLD code.
+	@# Always build from current source.
+	@uv tool install --force --reinstall --no-cache .
 	@TOOL_BIN="$$HOME/.local/share/uv/tools/markdown-tools/bin/md2pdf"; \
 	BREW_LIB="$$(brew --prefix 2>/dev/null)/lib"; \
 	rm -f "$$HOME/.local/bin/md2pdf"; \
